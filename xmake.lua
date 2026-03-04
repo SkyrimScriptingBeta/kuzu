@@ -12,18 +12,6 @@ local function define_kuzu_targets(suffix)
     suffix = suffix or ""
     local is_mt = (suffix == "_mt")
 
-    -- Helper to add pthread flags when building _mt variants on WASM
-    local function add_mt_flags_cxx(t)
-        if is_mt and is_plat("wasm") then
-            t:add("cxxflags", "-pthread", {force = true})
-        end
-    end
-    local function add_mt_flags_c(t)
-        if is_mt and is_plat("wasm") then
-            t:add("cflags", "-pthread", {force = true})
-        end
-    end
-
     -- ========================================================================
     -- Third-party static libraries
     -- ========================================================================
