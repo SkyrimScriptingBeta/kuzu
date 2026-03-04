@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kuzu WASM + OPFS Test</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+        h1 { color: #58a6ff; margin-bottom: 10px; }
+        .subtitle { color: #8b949e; margin-bottom: 20px; }
+        #output { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px;
+                  font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 14px; line-height: 1.6;
+                  white-space: pre-wrap; max-height: 70vh; overflow-y: auto; }
+        .success { color: #3fb950; }
+        .error { color: #f85149; }
+        .info { color: #58a6ff; }
+        .data { color: #d2a8ff; }
+        .timing { color: #8b949e; }
+        #queryInput { width: 100%; background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                      color: #c9d1d9; padding: 12px; font-family: 'Cascadia Code', monospace; font-size: 14px;
+                      margin: 10px 0; }
+        button { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 6px;
+                 cursor: pointer; font-size: 14px; margin-right: 8px; }
+        button:hover { background: #2ea043; }
+        button.danger { background: #da3633; }
+        button.danger:hover { background: #f85149; }
+        .controls { margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Kuzu WASM + OPFS Spike</h1>
+    <p class="subtitle">Embedded graph database running entirely in your browser with persistent storage</p>
+    <div class="controls">
+        <button onclick="runDemo()">Run Demo</button>
+        <button onclick="testPersistence()">Test OPFS Persistence</button>
+        <button class="danger" onclick="clearOPFS()">Clear OPFS Storage</button>
+    </div>
+    <input id="queryInput" type="text" placeholder="Enter a Cypher query..." onkeydown="if(event.key==='Enter')runQuery()">
+    <div class="controls">
+        <button onclick="runQuery()">Execute Query</button>
+    </div>
+    <div id="output">Loading Kuzu WASM...\n</div>
+
+    <script type="module">
+        // We load kuzu in a worker for OPFS sync access, but for the basic test
+        // we'll run it on the main thread first.
+        const output = document.getElementById('output');
+
+        function log(msg, cls = '') {
+            const span = document.createElement('span');
+            span.className = cls;
+            span.textContent = msg + '\n';
+            output.appendChild(span);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        let kuzu, db, conn;
+
+        async function init() {
+            try {
+                // Import the WASM module
+                const { default: createKuzu } = await import('./kuzu.js');
+                log('Loaded kuzu.js module', 'info');
+
+                kuzu = await createKuzu();
+                log(`Kuzu version: ${kuzu.KuzuWasm.version()}`, 'success');
+                log(`Storage version: ${kuzu.KuzuWasm.storageVersion()}`, 'info');
+
+                // Create in-memory database for basic test
+                db = new kuzu.KuzuDatabase("", 256 * 1024 * 1024);
+                conn = new kuzu.KuzuConnection(db);
+                log('In-memory database ready!', 'success');
+                log('');
+                log('Try clicking "Run Demo" or type a Cypher query below.', 'info');
+            } catch (e) {
+                log(`Error: ${e.message}`, 'error');
+                log(e.stack, 'error');
+            }
+        }
+
+        window.runQuery = function() {
+            const input = document.getElementById('queryInput');
+            const query = input.value.trim();
+            if (!query || !conn) return;
+
+            log(`> ${query}`, 'info');
+            const t0 = performance.now();
+            try {
+                const result = conn.queryResult(query);
+                const elapsed = (performance.now() - t0).toFixed(2);
+                if (result.success) {
+                    if (result.data) log(result.data.trim(), 'data');
+                    log(`(${result.numTuples} rows, ${elapsed}ms)`, 'timing');
+                } else {
+                    log(`ERROR: ${result.error}`, 'error');
+                }
+            } catch (e) {
+                log(`Exception: ${e.message}`, 'error');
+            }
+            log('');
+        };
+
+        window.runDemo = function() {
+            if (!conn) { log('Not initialized yet', 'error'); return; }
+
+            log('=== Running Demo ===', 'info');
+            const queries = [
+                "CREATE NODE TABLE IF NOT EXISTS Person(name STRING, age INT64, PRIMARY KEY (name))",
+                "CREATE REL TABLE IF NOT EXISTS Knows(FROM Person TO Person, since INT64)",
+                "CREATE (p:Person {name: 'Alice', age: 30})",
+                "CREATE (p:Person {name: 'Bob', age: 25})",
+                "CREATE (p:Person {name: 'Charlie', age: 35})",
+                "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:Knows {since: 2020}]->(b)",
+                "MATCH (a:Person {name: 'Bob'}), (b:Person {name: 'Charlie'}) CREATE (a)-[:Knows {since: 2021}]->(b)",
+            ];
+
+            for (const q of queries) {
+                log(`> ${q}`, 'info');
+                log(conn.query(q).trim(), 'data');
+            }
+
+            log('');
+            log('=== Query Results ===', 'info');
+
+            const readQueries = [
+                "MATCH (p:Person) RETURN p.name, p.age ORDER BY p.name",
+                "MATCH (a:Person)-[k:Knows]->(b:Person) RETURN a.name AS from, b.name AS to, k.since",
+                "MATCH (a:Person {name: 'Alice'})-[:Knows*1..2]->(b:Person) RETURN b.name AS reachable",
+            ];
+
+            for (const q of readQueries) {
+                log(`> ${q}`, 'info');
+                const t0 = performance.now();
+                const result = conn.queryResult(q);
+                const elapsed = (performance.now() - t0).toFixed(2);
+                if (result.success) {
+                    log(result.data.trim(), 'data');
+                    log(`(${result.numTuples} rows, ${elapsed}ms)`, 'timing');
+                }
+                log('');
+            }
+        };
+
+        window.testPersistence = async function() {
+            log('=== OPFS Persistence Test ===', 'info');
+            log('Note: OPFS requires running in a Web Worker for sync access.', 'info');
+            log('This basic test uses Emscripten MEMFS (volatile).', 'info');
+            log('See test-opfs-worker/ for the full OPFS persistence demo.', 'info');
+            log('');
+
+            // Test filesystem operations via Emscripten FS
+            try {
+                kuzu.FS.mkdir('/testdb');
+                log('Created /testdb directory in Emscripten VFS', 'success');
+
+                // Create a database at that path
+                const persistDb = new kuzu.KuzuDatabase("/testdb", 128 * 1024 * 1024);
+                const persistConn = new kuzu.KuzuConnection(persistDb);
+
+                persistConn.query("CREATE NODE TABLE Test(id INT64, val STRING, PRIMARY KEY (id))");
+                persistConn.query("CREATE (t:Test {id: 1, val: 'hello from WASM!'})");
+                const r = persistConn.queryResult("MATCH (t:Test) RETURN t.id, t.val");
+                log(`Persisted query result: ${r.data.trim()}`, 'data');
+
+                // Check what files Kuzu created
+                const files = kuzu.FS.readdir('/testdb');
+                log(`Files in /testdb: ${JSON.stringify(files)}`, 'info');
+
+                persistConn.delete();
+                persistDb.delete();
+
+                log('');
+                log('OPFS persistence requires a Worker with createSyncAccessHandle().', 'info');
+                log('This spike confirms the WASM module works - OPFS integration is next!', 'success');
+            } catch(e) {
+                log(`Error: ${e.message}`, 'error');
+            }
+        };
+
+        window.clearOPFS = async function() {
+            try {
+                const root = await navigator.storage.getDirectory();
+                for await (const [name] of root.entries()) {
+                    await root.removeEntry(name, { recursive: true });
+                }
+                log('OPFS storage cleared.', 'success');
+            } catch(e) {
+                log(`Error clearing OPFS: ${e.message}`, 'error');
+            }
+        };
+
+        init();
+    </script>
+</body>
+</html>

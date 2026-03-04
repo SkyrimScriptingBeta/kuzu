@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kuzu WASM + OPFS Persistence Test</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+        h1 { color: #58a6ff; margin-bottom: 4px; }
+        .subtitle { color: #8b949e; margin-bottom: 20px; }
+        #output { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px;
+                  font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 13px; line-height: 1.5;
+                  white-space: pre-wrap; max-height: 60vh; overflow-y: auto; }
+        .success { color: #3fb950; }
+        .error { color: #f85149; }
+        .info { color: #58a6ff; }
+        .data { color: #d2a8ff; }
+        .timing { color: #8b949e; }
+        .highlight { color: #ffa657; font-weight: bold; }
+        #queryInput { width: 100%; background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                      color: #c9d1d9; padding: 12px; font-family: 'Cascadia Code', monospace; font-size: 14px;
+                      margin: 10px 0; }
+        button { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 6px;
+                 cursor: pointer; font-size: 14px; margin-right: 8px; margin-bottom: 8px; }
+        button:hover { background: #2ea043; }
+        button.danger { background: #da3633; }
+        button.danger:hover { background: #f85149; }
+        button.info-btn { background: #1f6feb; }
+        button.info-btn:hover { background: #388bfd; }
+        .controls { margin: 10px 0; }
+        .status-bar { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 8px 16px;
+                      margin-bottom: 10px; display: flex; gap: 20px; font-size: 13px; }
+        .status-item { display: flex; align-items: center; gap: 6px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .dot.green { background: #3fb950; }
+        .dot.yellow { background: #d29922; }
+        .dot.red { background: #f85149; }
+    </style>
+</head>
+<body>
+    <h1>Kuzu WASM + OPFS</h1>
+    <p class="subtitle">Persistent graph database in the browser via WasmFS + JSPI</p>
+
+    <div class="status-bar">
+        <div class="status-item"><div class="dot" id="wasmDot"></div><span id="wasmStatus">WASM: Loading...</span></div>
+        <div class="status-item"><div class="dot" id="opfsDot"></div><span id="opfsStatus">OPFS: Checking...</span></div>
+        <div class="status-item"><div class="dot" id="dbDot"></div><span id="dbStatus">DB: Not created</span></div>
+    </div>
+
+    <div class="controls">
+        <button onclick="createPersistentDB()">Create Persistent DB</button>
+        <button onclick="insertTestData()">Insert Test Data</button>
+        <button onclick="queryData()">Query Data</button>
+        <button class="info-btn" onclick="checkPersistence()">Verify Persistence (reload page after inserting)</button>
+        <button class="danger" onclick="clearAll()">Clear Everything</button>
+    </div>
+    <input id="queryInput" type="text" placeholder="Enter a Cypher query..." onkeydown="if(event.key==='Enter')runQuery()">
+    <div class="controls">
+        <button onclick="runQuery()">Execute</button>
+    </div>
+    <div id="output"></div>
+
+    <script type="module">
+        const output = document.getElementById('output');
+
+        function log(msg, cls = '') {
+            const span = document.createElement('span');
+            span.className = cls;
+            span.textContent = msg + '\n';
+            output.appendChild(span);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function setStatus(id, text, color) {
+            document.getElementById(id + 'Status').textContent = text;
+            document.getElementById(id + 'Dot').className = `dot ${color}`;
+        }
+
+        let kuzu, db, conn;
+
+        async function init() {
+            // Check OPFS support
+            if ('storage' in navigator && 'getDirectory' in navigator.storage) {
+                setStatus('opfs', 'OPFS: Supported', 'green');
+                log('OPFS is supported in this browser', 'success');
+            } else {
+                setStatus('opfs', 'OPFS: Not supported', 'red');
+                log('OPFS is NOT supported in this browser!', 'error');
+            }
+
+            // Check Cross-Origin-Isolation
+            if (crossOriginIsolated) {
+                log('Cross-Origin-Isolated: Yes', 'success');
+            } else {
+                log('Cross-Origin-Isolated: No (SharedArrayBuffer unavailable)', 'info');
+                log('This is fine - we use JSPI instead of pthreads', 'timing');
+            }
+
+            try {
+                setStatus('wasm', 'WASM: Loading...', 'yellow');
+                const { default: createKuzu } = await import('./kuzu-opfs.js');
+                log('Loading Kuzu WASM (WasmFS + JSPI build)...', 'info');
+
+                kuzu = await createKuzu();
+                const version = kuzu.KuzuWasm.version();
+                setStatus('wasm', `WASM: v${version}`, 'green');
+                log(`Kuzu WASM loaded! Version: ${version}`, 'success');
+                log('');
+                log('Click "Create Persistent DB" to start.', 'info');
+                log('Insert data, then RELOAD THE PAGE and click "Verify Persistence".', 'highlight');
+                log('');
+            } catch (e) {
+                setStatus('wasm', 'WASM: Failed', 'red');
+                log(`Error loading WASM: ${e.message}`, 'error');
+                log(e.stack || '', 'error');
+            }
+        }
+
+        window.createPersistentDB = function() {
+            if (!kuzu) { log('WASM not loaded', 'error'); return; }
+            try {
+                log('Creating database at /kuzu-test-db ...', 'info');
+                // WasmFS+OPFS mounts at / so /kuzu-test-db will be in OPFS
+                db = new kuzu.KuzuDatabase("/kuzu-test-db", 128 * 1024 * 1024);
+                conn = new kuzu.KuzuConnection(db);
+                setStatus('db', 'DB: Connected', 'green');
+                log('Database created and connected!', 'success');
+                log('Files written to /kuzu-test-db are backed by OPFS.', 'info');
+            } catch(e) {
+                setStatus('db', 'DB: Error', 'red');
+                log(`Error: ${e.message}`, 'error');
+            }
+        };
+
+        window.insertTestData = function() {
+            if (!conn) { log('Create DB first', 'error'); return; }
+            try {
+                const queries = [
+                    "CREATE NODE TABLE IF NOT EXISTS Person(name STRING, age INT64, PRIMARY KEY (name))",
+                    "CREATE REL TABLE IF NOT EXISTS Knows(FROM Person TO Person, since INT64)",
+                    "CREATE (p:Person {name: 'Alice', age: 30})",
+                    "CREATE (p:Person {name: 'Bob', age: 25})",
+                    "CREATE (p:Person {name: 'Charlie', age: 35})",
+                    "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:Knows {since: 2020}]->(b)",
+                    "MATCH (a:Person {name: 'Bob'}), (b:Person {name: 'Charlie'}) CREATE (a)-[:Knows {since: 2021}]->(b)",
+                ];
+                for (const q of queries) {
+                    const result = conn.query(q);
+                    log(`> ${q}`, 'info');
+                    if (result.trim()) log(result.trim(), 'data');
+                }
+                log('', '');
+                log('Data inserted! Now RELOAD the page and click "Verify Persistence".', 'highlight');
+            } catch(e) {
+                log(`Error: ${e.message}`, 'error');
+            }
+        };
+
+        window.queryData = function() {
+            if (!conn) { log('Create DB first', 'error'); return; }
+            const queries = [
+                "MATCH (p:Person) RETURN p.name, p.age ORDER BY p.name",
+                "MATCH (a:Person)-[k:Knows]->(b:Person) RETURN a.name AS from, b.name AS to, k.since",
+            ];
+            for (const q of queries) {
+                log(`> ${q}`, 'info');
+                const t0 = performance.now();
+                const result = conn.queryResult(q);
+                const elapsed = (performance.now() - t0).toFixed(2);
+                if (result.success) {
+                    log(result.data.trim(), 'data');
+                    log(`(${result.numTuples} rows, ${elapsed}ms)`, 'timing');
+                } else {
+                    log(`ERROR: ${result.error}`, 'error');
+                }
+                log('');
+            }
+        };
+
+        window.checkPersistence = function() {
+            if (!kuzu) { log('WASM not loaded', 'error'); return; }
+            log('=== Persistence Verification ===', 'highlight');
+            log('Opening database at /kuzu-test-db ...', 'info');
+            try {
+                if (conn) { conn.delete(); conn = null; }
+                if (db) { db.delete(); db = null; }
+
+                db = new kuzu.KuzuDatabase("/kuzu-test-db", 128 * 1024 * 1024);
+                conn = new kuzu.KuzuConnection(db);
+                setStatus('db', 'DB: Connected', 'green');
+
+                const result = conn.queryResult("MATCH (p:Person) RETURN p.name, p.age ORDER BY p.name");
+                if (result.success && result.numTuples > 0) {
+                    log('DATA PERSISTED ACROSS PAGE RELOAD!', 'success');
+                    log(result.data.trim(), 'data');
+                    log(`Found ${result.numTuples} rows`, 'success');
+                } else if (result.success && result.numTuples === 0) {
+                    log('Database opened but no data found.', 'info');
+                    log('Either data was not inserted, or OPFS persistence is not working.', 'info');
+                } else {
+                    log('No Person table found - this is a fresh database.', 'info');
+                    log(`${result.error}`, 'error');
+                }
+            } catch(e) {
+                log(`Error: ${e.message}`, 'error');
+                log('If the DB folder does not exist, persistence may not be working.', 'info');
+            }
+        };
+
+        window.clearAll = function() {
+            try {
+                if (conn) { conn.delete(); conn = null; }
+                if (db) { db.delete(); db = null; }
+                setStatus('db', 'DB: Cleared', 'yellow');
+                log('Database closed.', 'info');
+            } catch(e) {}
+
+            // Clear OPFS
+            navigator.storage.getDirectory().then(async (root) => {
+                for await (const [name] of root.entries()) {
+                    await root.removeEntry(name, { recursive: true });
+                    log(`Deleted OPFS entry: ${name}`, 'info');
+                }
+                log('OPFS storage cleared.', 'success');
+            }).catch(e => log(`Error: ${e.message}`, 'error'));
+        };
+
+        window.runQuery = function() {
+            const input = document.getElementById('queryInput');
+            const query = input.value.trim();
+            if (!query || !conn) { log('Enter a query and ensure DB is connected', 'error'); return; }
+
+            log(`> ${query}`, 'info');
+            const t0 = performance.now();
+            try {
+                const result = conn.queryResult(query);
+                const elapsed = (performance.now() - t0).toFixed(2);
+                if (result.success) {
+                    if (result.data) log(result.data.trim(), 'data');
+                    log(`(${result.numTuples} rows, ${elapsed}ms)`, 'timing');
+                } else {
+                    log(`ERROR: ${result.error}`, 'error');
+                }
+            } catch(e) {
+                log(`Exception: ${e.message}`, 'error');
+            }
+            log('');
+        };
+
+        init();
+    </script>
+</body>
+</html>

@@ -230,8 +230,13 @@ target("kuzu")
         add_defines("__32BIT__")
     end
 
+    -- WASM / Emscripten specifics
+    if is_plat("wasm") then
+        add_defines("__WASM__", "__SINGLE_THREADED__", "BM_MALLOC", {public = true})
+        add_cxxflags("-fexceptions", "-w", {force = true})
+        add_cflags("-fexceptions", "-w", {force = true})
     -- Windows / MSVC specifics
-    if is_plat("windows") then
+    elseif is_plat("windows") then
         add_defines(
             "_USE_MATH_DEFINES", "NOMINMAX", "SERD_STATIC",
             "_REGEX_MAX_STACK_COUNT=0", "_REGEX_MAX_COMPLEXITY_COUNT=0",
@@ -369,3 +374,95 @@ void loadLinkedExtensions(main::ClientContext* context,
         target:add("includedirs", path.join(gendir, "codegen", "include"))
     end)
 target_end()
+
+-- ============================================================================
+-- WASM binary (only built when targeting wasm platform)
+-- ============================================================================
+
+if is_plat("wasm") then
+target("kuzu_wasm")
+    set_kind("binary")
+    set_basename("kuzu")
+    set_extension(".js")
+
+    add_files("wasm/kuzu_wasm.cpp")
+    add_deps("kuzu")
+
+    -- Embind + Emscripten link flags
+    add_ldflags(
+        "-lembind",
+        "-sALLOW_MEMORY_GROWTH=1",
+        "-sMAXIMUM_MEMORY=4GB",
+        "-sMODULARIZE=1",
+        "-sEXPORT_NAME=createKuzu",
+        "-sEXPORTED_RUNTIME_METHODS=['FS','wasmMemory']",
+        "-sSTACK_SIZE=4MB",
+        "-sWASM_BIGINT",
+        "-fexceptions",
+        "-sDISABLE_EXCEPTION_CATCHING=0",
+        "-sENVIRONMENT=web,worker",
+        "-sASSERTIONS=1",
+        {force = true}
+    )
+    add_cxxflags("-fexceptions", {force = true})
+target_end()
+
+-- Node-compatible WASM binary (for testing with bun/node)
+target("kuzu_wasm_node")
+    set_kind("binary")
+    set_basename("kuzu-node")
+    set_extension(".js")
+
+    add_files("wasm/kuzu_wasm.cpp")
+    add_deps("kuzu")
+
+    add_ldflags(
+        "-lembind",
+        "-sALLOW_MEMORY_GROWTH=1",
+        "-sMAXIMUM_MEMORY=4GB",
+        "-sMODULARIZE=1",
+        "-sEXPORT_NAME=createKuzu",
+        "-sEXPORTED_RUNTIME_METHODS=['FS','wasmMemory']",
+        "-sSTACK_SIZE=4MB",
+        "-sWASM_BIGINT",
+        "-fexceptions",
+        "-sDISABLE_EXCEPTION_CATCHING=0",
+        "-sENVIRONMENT=node",
+        "-sNODERAWFS=1",
+        "-sASSERTIONS=1",
+        {force = true}
+    )
+    add_cxxflags("-fexceptions", {force = true})
+target_end()
+
+-- OPFS-backed WASM binary (persistent storage via WasmFS + JSPI)
+target("kuzu_wasm_opfs")
+    set_kind("binary")
+    set_basename("kuzu-opfs")
+    set_extension(".js")
+
+    add_files("wasm/kuzu_wasm.cpp")
+    add_deps("kuzu")
+
+    add_ldflags(
+        "-lembind",
+        "-sALLOW_MEMORY_GROWTH=1",
+        "-sMAXIMUM_MEMORY=4GB",
+        "-sMODULARIZE=1",
+        "-sEXPORT_NAME=createKuzu",
+        "-sEXPORTED_RUNTIME_METHODS=['FS','wasmMemory']",
+        "-sSTACK_SIZE=4MB",
+        "-sWASM_BIGINT",
+        "-fexceptions",
+        "-sDISABLE_EXCEPTION_CATCHING=0",
+        "-sENVIRONMENT=web,worker",
+        "-sASSERTIONS=1",
+        -- WasmFS + OPFS for persistent browser storage
+        "-sWASMFS",
+        "-sFORCE_FILESYSTEM=1",
+        "-sJSPI",
+        {force = true}
+    )
+    add_cxxflags("-fexceptions", {force = true})
+target_end()
+end
