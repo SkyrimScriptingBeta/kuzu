@@ -40,7 +40,7 @@
 </head>
 <body>
     <h1>Kuzu WASM + OPFS</h1>
-    <p class="subtitle">Persistent graph database in the browser via WasmFS + pthreads</p>
+    <p class="subtitle">Persistent graph database in the browser via WasmFS + pthreads (runs in Web Worker)</p>
 
     <div class="status-bar">
         <div class="status-item"><div class="dot" id="wasmDot"></div><span id="wasmStatus">WASM: Loading...</span></div>
@@ -61,7 +61,6 @@
     </div>
     <div id="output"></div>
 
-    <script src="kuzu-opfs.js"></script>
     <script>
         const output = document.getElementById('output');
 
@@ -78,37 +77,59 @@
             document.getElementById(id + 'Dot').className = `dot ${color}`;
         }
 
-        let kuzu, db, conn;
+        // ================================================================
+        // Worker RPC layer
+        // ================================================================
+        const worker = new Worker('kuzu-worker.js');
+        let nextId = 1;
+        const pending = new Map();
 
+        worker.onmessage = function(e) {
+            const { id, result, error } = e.data;
+            const p = pending.get(id);
+            if (p) {
+                pending.delete(id);
+                if (error) p.reject(new Error(error));
+                else p.resolve(result);
+            }
+        };
+
+        function rpc(action, args = {}) {
+            return new Promise((resolve, reject) => {
+                const id = nextId++;
+                pending.set(id, { resolve, reject });
+                worker.postMessage({ id, action, args });
+            });
+        }
+
+        // ================================================================
+        // Init
+        // ================================================================
         async function init() {
-            // Check OPFS support
             if ('storage' in navigator && 'getDirectory' in navigator.storage) {
                 setStatus('opfs', 'OPFS: Supported', 'green');
                 log('OPFS is supported in this browser', 'success');
             } else {
                 setStatus('opfs', 'OPFS: Not supported', 'red');
-                log('OPFS is NOT supported in this browser!', 'error');
+                log('OPFS is NOT supported!', 'error');
             }
 
-            // Check Cross-Origin-Isolation
             if (crossOriginIsolated) {
                 log('Cross-Origin-Isolated: Yes (SharedArrayBuffer available)', 'success');
             } else {
                 log('Cross-Origin-Isolated: No - SharedArrayBuffer unavailable!', 'error');
-                log('The OPFS build requires Cross-Origin-Isolation for pthreads.', 'error');
-                log('Ensure server sends COOP/COEP headers.', 'error');
                 setStatus('wasm', 'WASM: Blocked (no COOP/COEP)', 'red');
                 return;
             }
 
             try {
                 setStatus('wasm', 'WASM: Loading...', 'yellow');
-                log('Loading Kuzu WASM (WasmFS + pthreads build)...', 'info');
+                log('Loading Kuzu WASM in Web Worker (WasmFS + pthreads build)...', 'info');
 
-                kuzu = await createKuzu();
-                const version = kuzu.KuzuWasm.version();
-                setStatus('wasm', `WASM: v${version}`, 'green');
-                log(`Kuzu WASM loaded! Version: ${version}`, 'success');
+                const info = await rpc('init');
+                setStatus('wasm', `WASM: v${info.version}`, 'green');
+                log(`Kuzu WASM loaded! Version: ${info.version}`, 'success');
+                log(`OPFS backend: ${info.hasOPFS ? 'enabled' : 'disabled'}`, info.hasOPFS ? 'success' : 'error');
                 log('');
                 log('Click "Create Persistent DB" to start.', 'info');
                 log('Insert data, then RELOAD THE PAGE and click "Verify Persistence".', 'highlight');
@@ -116,28 +137,25 @@
             } catch (e) {
                 setStatus('wasm', 'WASM: Failed', 'red');
                 log(`Error loading WASM: ${e.message}`, 'error');
-                log(e.stack || '', 'error');
             }
         }
 
-        window.createPersistentDB = function() {
-            if (!kuzu) { log('WASM not loaded', 'error'); return; }
+        // ================================================================
+        // Actions
+        // ================================================================
+        window.createPersistentDB = async function() {
             try {
-                log('Creating database at /kuzu-test-db ...', 'info');
-                // WasmFS+OPFS mounts at / so /kuzu-test-db will be in OPFS
-                db = new kuzu.KuzuDatabase("/kuzu-test-db", 128 * 1024 * 1024);
-                conn = new kuzu.KuzuConnection(db);
+                log('Creating database at /opfs/kuzu-test-db ...', 'info');
+                await rpc('createDatabase', { path: '/opfs/kuzu-test-db', bufferPoolSize: 128 * 1024 * 1024 });
                 setStatus('db', 'DB: Connected', 'green');
                 log('Database created and connected!', 'success');
-                log('Files written to /kuzu-test-db are backed by OPFS.', 'info');
             } catch(e) {
                 setStatus('db', 'DB: Error', 'red');
                 log(`Error: ${e.message}`, 'error');
             }
         };
 
-        window.insertTestData = function() {
-            if (!conn) { log('Create DB first', 'error'); return; }
+        window.insertTestData = async function() {
             try {
                 const queries = [
                     "CREATE NODE TABLE IF NOT EXISTS Person(name STRING, age INT64, PRIMARY KEY (name))",
@@ -149,8 +167,8 @@
                     "MATCH (a:Person {name: 'Bob'}), (b:Person {name: 'Charlie'}) CREATE (a)-[:Knows {since: 2021}]->(b)",
                 ];
                 for (const q of queries) {
-                    const result = conn.query(q);
                     log(`> ${q}`, 'info');
+                    const result = await rpc('queryString', { cypher: q });
                     if (result.trim()) log(result.trim(), 'data');
                 }
                 log('', '');
@@ -160,8 +178,7 @@
             }
         };
 
-        window.queryData = function() {
-            if (!conn) { log('Create DB first', 'error'); return; }
+        window.queryData = async function() {
             const queries = [
                 "MATCH (p:Person) RETURN p.name, p.age ORDER BY p.name",
                 "MATCH (a:Person)-[k:Knows]->(b:Person) RETURN a.name AS from, b.name AS to, k.since",
@@ -169,75 +186,74 @@
             for (const q of queries) {
                 log(`> ${q}`, 'info');
                 const t0 = performance.now();
-                const result = conn.queryResult(q);
-                const elapsed = (performance.now() - t0).toFixed(2);
-                if (result.success) {
-                    log(result.data.trim(), 'data');
-                    log(`(${result.numTuples} rows, ${elapsed}ms)`, 'timing');
-                } else {
-                    log(`ERROR: ${result.error}`, 'error');
+                try {
+                    const result = await rpc('query', { cypher: q });
+                    const elapsed = (performance.now() - t0).toFixed(2);
+                    if (result.success) {
+                        log(result.data.trim(), 'data');
+                        log(`(${result.numTuples} rows, ${elapsed}ms)`, 'timing');
+                    } else {
+                        log(`ERROR: ${result.error}`, 'error');
+                    }
+                } catch(e) {
+                    log(`Error: ${e.message}`, 'error');
                 }
                 log('');
             }
         };
 
-        window.checkPersistence = function() {
-            if (!kuzu) { log('WASM not loaded', 'error'); return; }
+        window.checkPersistence = async function() {
             log('=== Persistence Verification ===', 'highlight');
-            log('Opening database at /kuzu-test-db ...', 'info');
+            log('Opening database at /opfs/kuzu-test-db ...', 'info');
             try {
-                if (conn) { conn.delete(); conn = null; }
-                if (db) { db.delete(); db = null; }
-
-                db = new kuzu.KuzuDatabase("/kuzu-test-db", 128 * 1024 * 1024);
-                conn = new kuzu.KuzuConnection(db);
+                await rpc('createDatabase', { path: '/opfs/kuzu-test-db', bufferPoolSize: 128 * 1024 * 1024 });
                 setStatus('db', 'DB: Connected', 'green');
 
-                const result = conn.queryResult("MATCH (p:Person) RETURN p.name, p.age ORDER BY p.name");
+                const result = await rpc('query', { cypher: "MATCH (p:Person) RETURN p.name, p.age ORDER BY p.name" });
                 if (result.success && result.numTuples > 0) {
                     log('DATA PERSISTED ACROSS PAGE RELOAD!', 'success');
                     log(result.data.trim(), 'data');
                     log(`Found ${result.numTuples} rows`, 'success');
-                } else if (result.success && result.numTuples === 0) {
+                } else if (result.success) {
                     log('Database opened but no data found.', 'info');
-                    log('Either data was not inserted, or OPFS persistence is not working.', 'info');
+                    log('OPFS persistence may not be working.', 'error');
                 } else {
                     log('No Person table found - this is a fresh database.', 'info');
-                    log(`${result.error}`, 'error');
+                    log(result.error, 'error');
                 }
             } catch(e) {
                 log(`Error: ${e.message}`, 'error');
-                log('If the DB folder does not exist, persistence may not be working.', 'info');
             }
         };
 
-        window.clearAll = function() {
+        window.clearAll = async function() {
             try {
-                if (conn) { conn.delete(); conn = null; }
-                if (db) { db.delete(); db = null; }
+                await rpc('close');
                 setStatus('db', 'DB: Cleared', 'yellow');
                 log('Database closed.', 'info');
             } catch(e) {}
 
-            // Clear OPFS
-            navigator.storage.getDirectory().then(async (root) => {
+            try {
+                const root = await navigator.storage.getDirectory();
                 for await (const [name] of root.entries()) {
                     await root.removeEntry(name, { recursive: true });
                     log(`Deleted OPFS entry: ${name}`, 'info');
                 }
                 log('OPFS storage cleared.', 'success');
-            }).catch(e => log(`Error: ${e.message}`, 'error'));
+            } catch(e) {
+                log(`Error: ${e.message}`, 'error');
+            }
         };
 
-        window.runQuery = function() {
+        window.runQuery = async function() {
             const input = document.getElementById('queryInput');
-            const query = input.value.trim();
-            if (!query || !conn) { log('Enter a query and ensure DB is connected', 'error'); return; }
+            const cypher = input.value.trim();
+            if (!cypher) return;
 
-            log(`> ${query}`, 'info');
+            log(`> ${cypher}`, 'info');
             const t0 = performance.now();
             try {
-                const result = conn.queryResult(query);
+                const result = await rpc('query', { cypher });
                 const elapsed = (performance.now() - t0).toFixed(2);
                 if (result.success) {
                     if (result.data) log(result.data.trim(), 'data');

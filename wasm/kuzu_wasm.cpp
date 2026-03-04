@@ -4,17 +4,56 @@
 
 #include "main/kuzu.h"
 
+// OPFS backend support (only in the pthreaded/WasmFS build)
+#if __has_include(<emscripten/wasmfs.h>)
+#include <emscripten/wasmfs.h>
+#define HAS_WASMFS 1
+#else
+#define HAS_WASMFS 0
+#endif
+
 using namespace emscripten;
 using namespace kuzu::main;
 
-// Thin wrapper around Kuzu's C++ API for WASM/embind exposure.
-// Avoids raw pointers and complex types that embind can't handle directly.
+// ============================================================================
+// WasmFS OPFS mount hook
+// ============================================================================
+// wasmfs_before_preload() is called by WasmFS during startup, before file
+// preloading. We use it to mount the OPFS backend at /opfs so that any
+// database created at /opfs/... is transparently persisted to OPFS.
+//
+// This hook is only linked in the WasmFS build (kuzu_wasm_opfs target).
+// The non-WasmFS builds (kuzu_wasm, kuzu_wasm_node) ignore this.
+// ============================================================================
+
+#if HAS_WASMFS
+extern "C" {
+
+void wasmfs_before_preload(void) {
+    backend_t opfs = wasmfs_create_opfs_backend();
+    wasmfs_create_directory("/opfs", 0777, opfs);
+}
+
+} // extern "C"
+#endif
+
+// ============================================================================
+// Embind wrapper
+// ============================================================================
 
 class KuzuWasm {
 public:
     static std::string version() { return std::string(Version::getVersion()); }
 
     static uint64_t storageVersion() { return Version::getStorageVersion(); }
+
+    static bool hasOPFS() {
+#if HAS_WASMFS
+        return true;
+#else
+        return false;
+#endif
+    }
 };
 
 class KuzuDatabase {
@@ -78,7 +117,8 @@ private:
 EMSCRIPTEN_BINDINGS(kuzu_wasm) {
     class_<KuzuWasm>("KuzuWasm")
         .class_function("version", &KuzuWasm::version)
-        .class_function("storageVersion", &KuzuWasm::storageVersion);
+        .class_function("storageVersion", &KuzuWasm::storageVersion)
+        .class_function("hasOPFS", &KuzuWasm::hasOPFS);
 
     class_<KuzuDatabase>("KuzuDatabase")
         .constructor<const std::string&, uint64_t>();
