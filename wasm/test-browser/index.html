@@ -42,9 +42,8 @@
     </div>
     <div id="output">Loading Kuzu WASM...\n</div>
 
-    <script type="module">
-        // We load kuzu in a worker for OPFS sync access, but for the basic test
-        // we'll run it on the main thread first.
+    <script src="kuzu.js"></script>
+    <script>
         const output = document.getElementById('output');
 
         function log(msg, cls = '') {
@@ -59,8 +58,6 @@
 
         async function init() {
             try {
-                // Import the WASM module
-                const { default: createKuzu } = await import('./kuzu.js');
                 log('Loaded kuzu.js module', 'info');
 
                 kuzu = await createKuzu();

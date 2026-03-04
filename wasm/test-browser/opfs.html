@@ -40,7 +40,7 @@
 </head>
 <body>
     <h1>Kuzu WASM + OPFS</h1>
-    <p class="subtitle">Persistent graph database in the browser via WasmFS + JSPI</p>
+    <p class="subtitle">Persistent graph database in the browser via WasmFS + pthreads</p>
 
     <div class="status-bar">
         <div class="status-item"><div class="dot" id="wasmDot"></div><span id="wasmStatus">WASM: Loading...</span></div>
@@ -61,7 +61,8 @@
     </div>
     <div id="output"></div>
 
-    <script type="module">
+    <script src="kuzu-opfs.js"></script>
+    <script>
         const output = document.getElementById('output');
 
         function log(msg, cls = '') {
@@ -91,16 +92,18 @@
 
             // Check Cross-Origin-Isolation
             if (crossOriginIsolated) {
-                log('Cross-Origin-Isolated: Yes', 'success');
+                log('Cross-Origin-Isolated: Yes (SharedArrayBuffer available)', 'success');
             } else {
-                log('Cross-Origin-Isolated: No (SharedArrayBuffer unavailable)', 'info');
-                log('This is fine - we use JSPI instead of pthreads', 'timing');
+                log('Cross-Origin-Isolated: No - SharedArrayBuffer unavailable!', 'error');
+                log('The OPFS build requires Cross-Origin-Isolation for pthreads.', 'error');
+                log('Ensure server sends COOP/COEP headers.', 'error');
+                setStatus('wasm', 'WASM: Blocked (no COOP/COEP)', 'red');
+                return;
             }
 
             try {
                 setStatus('wasm', 'WASM: Loading...', 'yellow');
-                const { default: createKuzu } = await import('./kuzu-opfs.js');
-                log('Loading Kuzu WASM (WasmFS + JSPI build)...', 'info');
+                log('Loading Kuzu WASM (WasmFS + pthreads build)...', 'info');
 
                 kuzu = await createKuzu();
                 const version = kuzu.KuzuWasm.version();
