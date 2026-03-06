@@ -206,6 +206,7 @@ local function define_kuzu_targets(suffix)
 
         add_includedirs("src/include", {public = true})
         add_includedirs("src/include/c_api", {public = true})
+        add_headerfiles("src/include/(**)")
 
         add_includedirs(
             "third_party/antlr4_cypher/include",
