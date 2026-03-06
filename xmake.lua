@@ -204,8 +204,18 @@ local function define_kuzu_targets(suffix)
 
         add_files("src/**.cpp")
 
+        -- FTS extension: compile source files + snowball stemmer directly into kuzu
+        add_files("extension/fts/src/**.cpp|test/**.cpp|index/fts_storage_info.cpp")
+        add_files("extension/fts/third_party/snowball/libstemmer/libstemmer.c")
+        add_files("extension/fts/third_party/snowball/runtime/api.c")
+        add_files("extension/fts/third_party/snowball/runtime/utilities.c")
+        add_files("extension/fts/third_party/snowball/src_c/**.c")
+
         add_includedirs("src/include", {public = true})
         add_includedirs("src/include/c_api", {public = true})
+        add_includedirs("extension/fts/src/include")
+        add_includedirs("extension/fts/third_party/snowball/libstemmer")
+        add_includedirs("extension/fts/third_party/snowball/runtime")
         add_headerfiles("src/include/(**)")
 
         add_includedirs(
@@ -367,14 +377,15 @@ void loadLinkedExtensions(main::ClientContext* context,
             io.writefile(path.join(gendir, "codegen", "generated_extension_loader.cpp"), [=[
 #include "extension/loaded_extension.h"
 #include "generated_extension_loader.h"
+#include "main/fts_extension.h"
 
 namespace kuzu {
 namespace extension {
 
 void loadLinkedExtensions(main::ClientContext* context,
     std::vector<LoadedExtension>& loadedExtensions) {
-    (void)context;
-    (void)loadedExtensions;
+    fts_extension::FtsExtension::load(context);
+    loadedExtensions.emplace_back("fts", "", ExtensionSource::STATIC_LINKED);
 }
 
 } // namespace extension
