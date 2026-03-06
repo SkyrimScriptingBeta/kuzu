@@ -1,5 +1,5 @@
 set_project("kuzu")
-set_version("0.11.2.2")
+set_version("0.11.3")
 set_languages("c99", "cxx20")
 add_rules("mode.debug", "mode.release")
 
