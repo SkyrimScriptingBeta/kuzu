@@ -3,6 +3,8 @@ set_version("0.11.3")
 set_languages("c99", "cxx20")
 add_rules("mode.debug", "mode.release")
 
+add_requires("lz4", "zstd")
+
 -- ============================================================================
 -- Helper: define all third-party + kuzu targets with an optional suffix.
 -- When suffix="_mt", all targets get -pthread for WASM shared-memory support.
@@ -64,15 +66,6 @@ local function define_kuzu_targets(suffix)
         set_group("third_party")
         add_files("third_party/fastpfor/fastpfor/bitpacking.cpp")
         add_includedirs("third_party/fastpfor", {public = true})
-        if is_plat("windows") then add_cxxflags("/w") else add_cxxflags("-w") end
-        if is_mt and is_plat("wasm") then add_cxxflags("-pthread", {force = true}) end
-    target_end()
-
-    target("lz4" .. suffix)
-        set_kind("static")
-        set_group("third_party")
-        add_files("third_party/lz4/lz4.cpp")
-        add_includedirs("third_party/lz4", {public = true})
         if is_plat("windows") then add_cxxflags("/w") else add_cxxflags("-w") end
         if is_mt and is_plat("wasm") then add_cxxflags("-pthread", {force = true}) end
     target_end()
@@ -183,18 +176,6 @@ local function define_kuzu_targets(suffix)
         if is_mt and is_plat("wasm") then add_cflags("-pthread", {force = true}) end
     target_end()
 
-    target("zstd" .. suffix)
-        set_kind("static")
-        set_group("third_party")
-        add_files("third_party/zstd/common/*.cpp")
-        add_files("third_party/zstd/compress/*.cpp")
-        add_files("third_party/zstd/decompress/*.cpp")
-        add_includedirs("third_party/zstd/include", {public = true})
-        add_defines("ZSTDLIB_VISIBILITY=", "ZSTDERRORLIB_VISIBILITY=")
-        if is_plat("windows") then add_cxxflags("/w") else add_cxxflags("-w") end
-        if is_mt and is_plat("wasm") then add_cxxflags("-pthread", {force = true}) end
-    target_end()
-
     -- ========================================================================
     -- Kuzu static library
     -- ========================================================================
@@ -234,10 +215,8 @@ local function define_kuzu_targets(suffix)
             "third_party/re2",
             "third_party/alp/include",
             "third_party/utf8proc/include",
-            "third_party/zstd/include",
             "third_party/httplib",
             "third_party/pcg",
-            "third_party/lz4",
             "third_party/roaring_bitmap",
             "third_party/simsimd/include",
             "third_party/fastpfor",
@@ -281,10 +260,12 @@ local function define_kuzu_targets(suffix)
         add_deps(
             "antlr4_runtime" .. suffix, "antlr4_cypher" .. suffix,
             "brotlicommon" .. suffix, "brotlidec" .. suffix,
-            "fastpfor" .. suffix, "lz4" .. suffix, "mbedtls" .. suffix, "miniz" .. suffix,
+            "fastpfor" .. suffix, "mbedtls" .. suffix, "miniz" .. suffix,
             "parquet" .. suffix, "re2" .. suffix, "roaring_bitmap" .. suffix, "simsimd" .. suffix,
-            "snappy" .. suffix, "thrift" .. suffix, "utf8proc" .. suffix, "yyjson" .. suffix, "zstd" .. suffix
+            "snappy" .. suffix, "thrift" .. suffix, "utf8proc" .. suffix, "yyjson" .. suffix
         )
+
+        add_packages("lz4", "zstd")
 
         on_load(function(target)
             local gendir = path.join(os.projectdir(), "build", "xmake_generated")

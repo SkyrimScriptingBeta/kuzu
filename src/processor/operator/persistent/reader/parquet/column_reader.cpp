@@ -7,7 +7,7 @@
 #include "common/exception/not_implemented.h"
 #include "common/exception/runtime.h"
 #include "common/types/date_t.h"
-#include "lz4.hpp"
+#include <lz4.h>
 #include "miniz_wrapper.hpp"
 #include "processor/operator/persistent/reader/parquet/boolean_column_reader.h"
 #include "processor/operator/persistent/reader/parquet/callback_column_reader.h"
@@ -17,7 +17,7 @@
 #include "processor/operator/persistent/reader/parquet/templated_column_reader.h"
 #include "processor/operator/persistent/reader/parquet/uuid_column_reader.h"
 #include "snappy.h"
-#include "zstd.h"
+#include <zstd.h>
 
 using namespace kuzu::common;
 
@@ -352,9 +352,9 @@ void ColumnReader::decompressInternal(kuzu_parquet::format::CompressionCodec::ty
         // LCOV_EXCL_STOP
     } break;
     case CompressionCodec::ZSTD: {
-        auto res = kuzu_zstd::ZSTD_decompress(dst, dstSize, src, srcSize);
+        auto res = ZSTD_decompress(dst, dstSize, src, srcSize);
         // LCOV_EXCL_START
-        if (kuzu_zstd::ZSTD_isError(res) || res != (size_t)dstSize) {
+        if (ZSTD_isError(res) || res != (size_t)dstSize) {
             throw common::RuntimeException{"ZSTD decompression failed."};
         }
         // LCOV_EXCL_STOP
@@ -363,7 +363,7 @@ void ColumnReader::decompressInternal(kuzu_parquet::format::CompressionCodec::ty
         brotliDecompress(dst, dstSize, src, srcSize);
     } break;
     case CompressionCodec::LZ4_RAW: {
-        auto res = kuzu_lz4::LZ4_decompress_safe(reinterpret_cast<const char*>(src),
+        auto res = LZ4_decompress_safe(reinterpret_cast<const char*>(src),
             reinterpret_cast<char*>(dst), srcSize, dstSize);
         // LCOV_EXCL_START
         if (res != (int64_t)dstSize) {
