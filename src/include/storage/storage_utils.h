@@ -76,6 +76,9 @@ public:
     static std::string getTmpFilePath(const std::string& path) {
         return common::stringFormat("{}.{}", path, common::StorageConstants::TEMP_FILE_SUFFIX);
     }
+    static std::string getLockFilePath(const std::string& path) {
+        return common::stringFormat("{}.{}", path, common::StorageConstants::LOCK_FILE_SUFFIX);
+    }
 
     static std::string expandPath(const main::ClientContext* context, const std::string& path);
 

@@ -112,6 +112,15 @@ void Database::initMembers(std::string_view dbPath, construct_bm_func_t initBmFu
     vfs = std::make_unique<VirtualFileSystem>(databasePath);
     validatePathInReadOnly();
 
+    // Acquire an exclusive lock file for read-write mode to prevent multiple writers.
+    // Read-only mode skips locking entirely, allowing concurrent readers alongside a writer.
+    if (!dbConfig.readOnly && !DBConfig::isDBPathInMemory(databasePath)) {
+        auto lockFilePath = StorageUtils::getLockFilePath(databasePath);
+        lockFile = vfs->openFile(lockFilePath,
+            FileOpenFlags{FileFlags::WRITE | FileFlags::CREATE_IF_NOT_EXISTS,
+                FileLockType::WRITE_LOCK});
+    }
+
     bufferManager = initBmFunc(*this);
     memoryManager = std::make_unique<MemoryManager>(bufferManager.get(), vfs.get());
 #if defined(__APPLE__)

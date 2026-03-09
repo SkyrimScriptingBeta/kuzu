@@ -387,6 +387,35 @@ end
 define_kuzu_targets("")
 
 -- ============================================================================
+-- 🧪 Experiment binaries (concurrency testing)
+-- ============================================================================
+
+if not is_plat("wasm") then
+
+target("kuzu-experiment-writer")
+    set_kind("binary")
+    set_default(false)
+    add_files("experiments/writer.cpp")
+    add_deps("kuzu")
+target_end()
+
+target("kuzu-experiment-reader")
+    set_kind("binary")
+    set_default(false)
+    add_files("experiments/reader.cpp")
+    add_deps("kuzu")
+target_end()
+
+target("kuzu-experiment-concurrent")
+    set_kind("binary")
+    set_default(false)
+    add_files("experiments/concurrent_test.cpp")
+    add_deps("kuzu")
+target_end()
+
+end
+
+-- ============================================================================
 -- Build pthreaded targets for WASM OPFS (all .o files need -pthread)
 -- ============================================================================
 
