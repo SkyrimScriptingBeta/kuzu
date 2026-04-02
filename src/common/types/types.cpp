@@ -802,6 +802,10 @@ std::vector<LogicalType> LogicalType::copy(const std::vector<LogicalType*>& type
     return typesCopy;
 }
 
+PhysicalTypeID LogicalType::getPhysicalType(LogicalTypeID typeID) {
+    return getPhysicalType(typeID, nullptr);
+}
+
 PhysicalTypeID LogicalType::getPhysicalType(LogicalTypeID typeID,
     const std::unique_ptr<ExtraTypeInfo>& extraTypeInfo) {
     switch (typeID) {

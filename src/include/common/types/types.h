@@ -281,8 +281,9 @@ public:
     bool isInternalType() const { return category == TypeCategory::INTERNAL; }
 
     KUZU_API PhysicalTypeID getPhysicalType() const { return physicalType; }
+    KUZU_API static PhysicalTypeID getPhysicalType(LogicalTypeID logicalType);
     KUZU_API static PhysicalTypeID getPhysicalType(LogicalTypeID logicalType,
-        const std::unique_ptr<ExtraTypeInfo>& extraTypeInfo = nullptr);
+        const std::unique_ptr<ExtraTypeInfo>& extraTypeInfo);
 
     void setExtraTypeInfo(std::unique_ptr<ExtraTypeInfo> typeInfo) {
         extraTypeInfo = std::move(typeInfo);
