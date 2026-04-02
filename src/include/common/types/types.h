@@ -247,9 +247,29 @@ enum class PhysicalTypeID : uint8_t {
     POINTER = 25,
 };
 
-class ExtraTypeInfo;
 class StructField;
 class StructTypeInfo;
+
+class KUZU_API ExtraTypeInfo {
+public:
+    virtual ~ExtraTypeInfo() = default;
+
+    void serialize(Serializer& serializer) const { serializeInternal(serializer); }
+
+    virtual bool containsAny() const = 0;
+
+    virtual bool operator==(const ExtraTypeInfo& other) const = 0;
+
+    virtual std::unique_ptr<ExtraTypeInfo> copy() const = 0;
+
+    template<class TARGET>
+    const TARGET* constPtrCast() const {
+        return common::ku_dynamic_cast<const TARGET*>(this);
+    }
+
+protected:
+    virtual void serializeInternal(Serializer& serializer) const = 0;
+};
 
 enum class TypeCategory : uint8_t { INTERNAL = 0, UDT = 1 };
 
@@ -376,27 +396,6 @@ private:
     PhysicalTypeID physicalType;
     std::unique_ptr<ExtraTypeInfo> extraTypeInfo;
     TypeCategory category = TypeCategory::INTERNAL;
-};
-
-class KUZU_API ExtraTypeInfo {
-public:
-    virtual ~ExtraTypeInfo() = default;
-
-    void serialize(Serializer& serializer) const { serializeInternal(serializer); }
-
-    virtual bool containsAny() const = 0;
-
-    virtual bool operator==(const ExtraTypeInfo& other) const = 0;
-
-    virtual std::unique_ptr<ExtraTypeInfo> copy() const = 0;
-
-    template<class TARGET>
-    const TARGET* constPtrCast() const {
-        return common::ku_dynamic_cast<const TARGET*>(this);
-    }
-
-protected:
-    virtual void serializeInternal(Serializer& serializer) const = 0;
 };
 
 class KUZU_API UDTTypeInfo : public ExtraTypeInfo {
